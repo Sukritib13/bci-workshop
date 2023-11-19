@@ -18,6 +18,11 @@ from sklearn import svm
 from scipy.signal import butter, lfilter, lfilter_zi
 
 
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
+
+
 NOTCH_B, NOTCH_A = butter(4, np.array([55, 65])/(256/2), btype='bandstop')
 
 
@@ -137,7 +142,9 @@ def compute_feature_vector(eegdata, fs):
     feature_vector = np.concatenate((meanDelta, meanTheta, meanAlpha,
                                      meanBeta), axis=0)
 
-    feature_vector = np.log10(feature_vector)
+
+    epsilon = 1e-10
+    feature_vector = np.log10(feature_vector + epsilon)
 
     return feature_vector
 
@@ -169,7 +176,7 @@ def compute_feature_matrix(epochs, fs):
     return feature_matrix
 
 
-def train_classifier(feature_matrix_0, feature_matrix_1, algorithm='SVM'):
+def train_classifier(feature_matrix_0, feature_matrix_1, algorithm='SVM', target_type='binary'):
     """Train a binary classifier.
 
     Train a binary classifier. First perform Z-score normalization, then
@@ -194,12 +201,17 @@ def train_classifier(feature_matrix_0, feature_matrix_1, algorithm='SVM'):
 
     # Concatenate feature matrices and their respective labels
     y = np.concatenate((class0, class1), axis=0)
+    if target_type == 'binary':
+        y = np.ravel(y) 
+
     features_all = np.concatenate((feature_matrix_0, feature_matrix_1),
                                   axis=0)
 
     # Normalize features columnwise
     mu_ft = np.mean(features_all, axis=0)
     std_ft = np.std(features_all, axis=0)
+
+    std_ft[std_ft==0] = 1
 
     X = (features_all - mu_ft) / std_ft
 
@@ -212,6 +224,54 @@ def train_classifier(feature_matrix_0, feature_matrix_1, algorithm='SVM'):
 
     return clf, mu_ft, std_ft
 
+def train_multi_classifier(feature_matrices, algorithm='SVM'):
+    """Train a multiclass classifier.
+
+    Train a multiclass classifier. First perform Z-score normalization,
+    then fit the classifier.
+
+    Args:
+        feature_matrices (list of numpy.ndarray): List containing arrays of shape
+            (n_samples, n_features) with examples for each class
+        algorithm (str): Type of classifier to use. 'SVM' and 'RandomForest'
+            are supported.
+
+    Returns:
+        (sklearn object): trained classifier (scikit object)
+        (numpy.ndarray): normalization mean
+        (numpy.ndarray): normalization standard deviation
+    """
+    # Concatenate feature matrices and their respective labels
+    classes = len(feature_matrices)
+    features_all = np.concatenate(feature_matrices, axis=0)
+
+    # Create labels for each class
+    labels = []
+    for i in range(classes):
+        labels.extend([i] * feature_matrices[i].shape[0])
+
+    # Convert labels to numeric format
+    label_encoder = LabelEncoder()
+    encoded_labels = label_encoder.fit_transform(labels)
+
+    # Normalize features column-wise
+    mu_ft = np.mean(features_all, axis=0)
+    std_ft = np.std(features_all, axis=0)
+   
+    std_ft[std_ft==0] = 1
+    X = (features_all - mu_ft) / std_ft
+
+    # Train the classifier based on the specified algorithm
+    if algorithm == 'SVM':
+        clf = SVC(decision_function_shape='ovr')  # One-Vs-Rest strategy
+    elif algorithm == 'RandomForest':
+        clf = RandomForestClassifier()  # You can adjust parameters as needed
+    else:
+        raise ValueError("Invalid algorithm. Supported: 'SVM', 'RandomForest'")
+
+    clf.fit(X, encoded_labels)
+
+    return clf, mu_ft, std_ft
 
 def test_classifier(clf, feature_vector, mu_ft, std_ft):
     """Test the classifier on new data points.
